@@ -1,6 +1,7 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,9 +27,20 @@ FRONTEND_DIST = resolve_frontend_dist()
 INDEX_HTML = FRONTEND_DIST / "index.html"
 
 from . import crud
-from .database import Base, engine, get_db
-from .models import Task
-from .schemas import TaskCreate, TaskOut, TaskUpdate, TelegramStatus
+from .database import Base, SessionLocal, engine, get_db
+from .schemas import (
+    BulkTaskCreate,
+    BulkTaskResult,
+    CategoryCreate,
+    CategoryOut,
+    CategoryUpdate,
+    DayMarkOut,
+    DayMarkSet,
+    TaskCreate,
+    TaskOut,
+    TaskUpdate,
+    TelegramStatus,
+)
 from .scheduler import start_scheduler
 from .telegram_service import get_bot_debug_info, start_telegram_bot, stop_telegram_bot
 
@@ -39,6 +51,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        crud.seed_default_categories(db)
+    finally:
+        db.close()
     if INDEX_HTML.is_file():
         logger.info("Веб-интерфейс: %s", INDEX_HTML)
     else:
@@ -115,6 +132,56 @@ def remove_task(task_id: int, db: Session = Depends(get_db)):
     if not task:
         raise HTTPException(404, "Задача не найдена")
     crud.delete_task(db, task)
+
+
+@app.post("/api/tasks/bulk", response_model=BulkTaskResult, status_code=201)
+def post_tasks_bulk(payload: BulkTaskCreate, db: Session = Depends(get_db)):
+    tasks = crud.bulk_create_tasks(db, payload.title, payload.notes, payload.due_ats)
+    return BulkTaskResult(created=len(tasks), tasks=tasks)
+
+
+@app.get("/api/categories", response_model=list[CategoryOut])
+def get_categories(db: Session = Depends(get_db)):
+    return crud.list_categories(db)
+
+
+@app.post("/api/categories", response_model=CategoryOut, status_code=201)
+def post_category(payload: CategoryCreate, db: Session = Depends(get_db)):
+    return crud.create_category(db, payload.name, payload.color, payload.sort_order)
+
+
+@app.patch("/api/categories/{category_id}", response_model=CategoryOut)
+def patch_category(
+    category_id: int, payload: CategoryUpdate, db: Session = Depends(get_db)
+):
+    cat = crud.get_category(db, category_id)
+    if not cat:
+        raise HTTPException(404, "Категория не найдена")
+    return crud.update_category(db, cat, **payload.model_dump(exclude_unset=True))
+
+
+@app.delete("/api/categories/{category_id}", status_code=204)
+def remove_category(category_id: int, db: Session = Depends(get_db)):
+    cat = crud.get_category(db, category_id)
+    if not cat:
+        raise HTTPException(404, "Категория не найдена")
+    crud.delete_category(db, cat)
+
+
+@app.get("/api/day-marks", response_model=list[DayMarkOut])
+def get_day_marks(
+    date_from: date | None = None,
+    date_to: date | None = None,
+    db: Session = Depends(get_db),
+):
+    return crud.list_day_marks(db, date_from, date_to)
+
+
+@app.put("/api/day-marks/{day}", response_model=DayMarkOut | None)
+def put_day_mark(day: date, payload: DayMarkSet, db: Session = Depends(get_db)):
+    if payload.category_id is not None and not crud.get_category(db, payload.category_id):
+        raise HTTPException(404, "Категория не найдена")
+    return crud.set_day_mark(db, day, payload.category_id)
 
 
 @app.get("/api/telegram/status", response_model=TelegramStatus)

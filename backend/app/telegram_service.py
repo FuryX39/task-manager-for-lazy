@@ -93,15 +93,24 @@ async def start_telegram_bot() -> None:
 
     _main_loop = asyncio.get_running_loop()
 
-    # Webhook блокирует polling (частая проблема на VPS)
-    await _application.bot.delete_webhook(drop_pending_updates=True)
-
-    await _application.initialize()
-    await _application.start()
-    await _application.updater.start_polling(drop_pending_updates=True)
-
-    me = await _application.bot.get_me()
-    logger.info("Telegram-бот запущен: @%s (polling)", me.username)
+    try:
+        await _application.initialize()
+        # Webhook блокирует polling (частая проблема на VPS)
+        try:
+            await _application.bot.delete_webhook(drop_pending_updates=True)
+        except Exception:
+            logger.exception("Не удалось сбросить webhook (продолжаю)")
+        await _application.start()
+        await _application.updater.start_polling(drop_pending_updates=True)
+        try:
+            me = await _application.bot.get_me()
+            logger.info("Telegram-бот запущен: @%s (polling)", me.username)
+        except Exception:
+            logger.info("Telegram-бот запущен (polling)")
+    except Exception:
+        logger.exception("Telegram-бот не удалось запустить — API продолжает работать")
+        _application = None
+        _main_loop = None
 
 
 async def stop_telegram_bot() -> None:

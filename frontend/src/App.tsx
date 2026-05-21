@@ -1,303 +1,201 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { Task, TelegramStatus } from "./types";
+import BulkForm from "./components/BulkForm";
+import Calendar from "./components/Calendar";
+import DayModal from "./components/DayModal";
+import Settings from "./components/Settings";
+import type { Category, DayMark, Task, TelegramStatus } from "./types";
+import { dueDateKey } from "./utils";
 
-function toLocalInputValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function formatDue(iso: string): string {
-  return new Date(iso).toLocaleString("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function groupTasks(tasks: Task[]) {
-  const now = Date.now();
-  const active: Task[] = [];
-  const overdue: Task[] = [];
-  const done: Task[] = [];
-
-  for (const t of tasks) {
-    if (t.completed) {
-      done.push(t);
-      continue;
-    }
-    if (new Date(t.due_at).getTime() < now) {
-      overdue.push(t);
-    } else {
-      active.push(t);
-    }
-  }
-
-  return { active, overdue, done };
-}
-
-function TaskRow({
-  task,
-  overdue,
-  onToggle,
-  onDelete,
-}: {
-  task: Task;
-  overdue: boolean;
-  onToggle: (t: Task) => void;
-  onDelete: (id: number) => void;
-}) {
-  return (
-    <li
-      className={`task-item ${task.completed ? "completed" : ""} ${overdue ? "overdue" : ""}`}
-    >
-      <input
-        type="checkbox"
-        checked={task.completed}
-        onChange={() => onToggle(task)}
-        aria-label={`Выполнено: ${task.title}`}
-      />
-      <div>
-        <p className="task-title">{task.title}</p>
-        <p className="task-meta">{formatDue(task.due_at)}</p>
-        {task.notes && <p className="task-notes">{task.notes}</p>}
-      </div>
-      <button type="button" className="btn-danger" onClick={() => onDelete(task.id)}>
-        Удалить
-      </button>
-    </li>
-  );
-}
+type Tab = "calendar" | "bulk" | "settings";
 
 export default function App() {
+  const [tab, setTab] = useState<Tab>("calendar");
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [tg, setTg] = useState<TelegramStatus>({ linked: false, link_code: null });
-  const [error, setError] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [notes, setNotes] = useState("");
-  const [dueAt, setDueAt] = useState(() => {
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [dayMarks, setDayMarks] = useState<DayMark[]>([]);
+  const [telegram, setTelegram] = useState<TelegramStatus>({ linked: false, link_code: null });
+  const [cursor, setCursor] = useState<Date>(() => {
     const d = new Date();
-    d.setMinutes(d.getMinutes() + 30 - (d.getMinutes() % 15));
-    d.setSeconds(0, 0);
-    return toLocalInputValue(d);
+    d.setDate(1);
+    return d;
   });
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const reload = useCallback(async () => {
     try {
       setError(null);
-      const [taskList, status] = await Promise.all([
+      const [t, c, m, tg] = await Promise.all([
         api.listTasks(),
+        api.listCategories(),
+        api.listDayMarks(),
         api.telegramStatus(),
       ]);
-      setTasks(taskList);
-      setTg(status);
+      setTasks(t);
+      setCategories(c);
+      setDayMarks(m);
+      setTelegram(tg);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     }
   }, []);
 
   useEffect(() => {
-    load();
-    const id = setInterval(load, 60_000);
+    reload();
+    const id = setInterval(reload, 60_000);
     return () => clearInterval(id);
-  }, [load]);
+  }, [reload]);
 
-  const groups = useMemo(() => groupTasks(tasks), [tasks]);
+  const dayTasks = useMemo(() => {
+    if (!selectedDay) return [];
+    return tasks.filter((t) => dueDateKey(t.due_at) === selectedDay);
+  }, [tasks, selectedDay]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) return;
-    try {
-      setError(null);
-      const due = new Date(dueAt);
-      await api.createTask({
-        title: title.trim(),
-        notes: notes.trim() || null,
-        due_at: due.toISOString(),
-      });
-      setTitle("");
-      setNotes("");
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Не удалось создать задачу");
-    }
+  const currentDayCategoryId = useMemo(() => {
+    if (!selectedDay) return undefined;
+    return dayMarks.find((m) => m.day === selectedDay)?.category_id;
+  }, [dayMarks, selectedDay]);
+
+  async function handleAddTask(title: string, notes: string | null, dueIso: string) {
+    await api.createTask({ title, notes, due_at: dueIso });
+    await reload();
   }
 
-  async function toggleTask(task: Task) {
-    try {
-      setError(null);
-      await api.updateTask(task.id, { completed: !task.completed });
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка обновления");
-    }
+  async function handleToggleTask(t: Task) {
+    await api.updateTask(t.id, { completed: !t.completed });
+    await reload();
   }
 
-  async function deleteTask(id: number) {
-    if (!confirm("Удалить задачу?")) return;
-    try {
-      setError(null);
-      await api.deleteTask(id);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка удаления");
-    }
+  async function handleDeleteTask(id: number) {
+    await api.deleteTask(id);
+    await reload();
   }
 
-  async function linkTelegram() {
-    try {
-      setError(null);
-      const status = await api.createLinkCode();
-      setTg(status);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка привязки");
-    }
+  async function handleSetCategory(categoryId: number | null) {
+    if (!selectedDay) return;
+    await api.setDayMark(selectedDay, categoryId);
+    await reload();
   }
 
-  async function unlinkTelegram() {
-    try {
-      setError(null);
-      const status = await api.unlinkTelegram();
-      setTg(status);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Ошибка отвязки");
-    }
+  async function handleBulk(body: { title: string; notes: string | null; due_ats: string[] }) {
+    const res = await api.bulkCreate(body);
+    await reload();
+    return res.created;
+  }
+
+  async function handleCreateCategory(name: string, color: string) {
+    const order = categories.length === 0 ? 10 : Math.max(...categories.map((c) => c.sort_order)) + 10;
+    await api.createCategory({ name, color, sort_order: order });
+    await reload();
+  }
+
+  async function handleUpdateCategory(
+    id: number,
+    patch: Partial<{ name: string; color: string }>,
+  ) {
+    await api.updateCategory(id, patch);
+    await reload();
+  }
+
+  async function handleDeleteCategory(id: number) {
+    await api.deleteCategory(id);
+    await reload();
+  }
+
+  async function handleLinkTelegram() {
+    const status = await api.createLinkCode();
+    setTelegram(status);
+  }
+
+  async function handleUnlinkTelegram() {
+    const status = await api.unlinkTelegram();
+    setTelegram(status);
   }
 
   return (
-    <>
-      <h1>Таск-менеджер</h1>
-      <p className="subtitle">Задачи по дате и времени с напоминаниями в Telegram</p>
+    <div className="app">
+      <header className="app-header">
+        <div>
+          <h1>Таск-менеджер</h1>
+          <p className="subtitle">Календарь, цветные метки дней и напоминания в Telegram</p>
+        </div>
+        <nav className="tabs">
+          <button
+            type="button"
+            className={`tab ${tab === "calendar" ? "active" : ""}`}
+            onClick={() => setTab("calendar")}
+          >
+            Календарь
+          </button>
+          <button
+            type="button"
+            className={`tab ${tab === "bulk" ? "active" : ""}`}
+            onClick={() => setTab("bulk")}
+          >
+            Массовое добавление
+          </button>
+          <button
+            type="button"
+            className={`tab ${tab === "settings" ? "active" : ""}`}
+            onClick={() => setTab("settings")}
+          >
+            Настройки
+          </button>
+        </nav>
+      </header>
 
       {error && <p className="error">{error}</p>}
 
-      <section className="panel">
-        <h2>Telegram</h2>
-        <div className="telegram-box">
-          {tg.linked ? (
-            <>
-              <p className="status-ok">Бот привязан — напоминания придут в Telegram.</p>
-              <div className="actions-row">
-                <button type="button" className="btn-ghost" onClick={unlinkTelegram}>
-                  Отвязать
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p className="hint">
-                Создайте бота у @BotFather, укажите токен в .env, затем привяжите чат.
-              </p>
-              {tg.link_code ? (
-                <>
-                  <p className="hint">Отправьте боту команду (код действует 15 минут):</p>
-                  <div className="telegram-code">/link {tg.link_code}</div>
-                </>
-              ) : (
-                <button type="button" className="btn-primary" onClick={linkTelegram}>
-                  Привязать Telegram
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      </section>
-
-      <section className="panel">
-        <h2>Новая задача</h2>
-        <form className="form-grid" onSubmit={handleSubmit}>
-          <label>
-            Название
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Например: созвон с командой"
-              required
-            />
-          </label>
-          <label>
-            Дата и время
-            <input
-              type="datetime-local"
-              value={dueAt}
-              onChange={(e) => setDueAt(e.target.value)}
-              required
-            />
-          </label>
-          <label>
-            Заметки (необязательно)
-            <textarea
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-              placeholder="Детали задачи"
-            />
-          </label>
-          <button type="submit" className="btn-primary">
-            Добавить
-          </button>
-        </form>
-      </section>
-
-      <section className="panel">
-        <h2>Задачи</h2>
-        {tasks.length === 0 ? (
-          <p className="empty">Пока нет задач — добавьте первую выше.</p>
-        ) : (
-          <>
-            {groups.overdue.length > 0 && (
-              <>
-                <p className="section-label">Просрочено</p>
-                <ul className="task-list">
-                  {groups.overdue.map((t) => (
-                    <TaskRow
-                      key={t.id}
-                      task={t}
-                      overdue
-                      onToggle={toggleTask}
-                      onDelete={deleteTask}
-                    />
-                  ))}
-                </ul>
-              </>
-            )}
-            {groups.active.length > 0 && (
-              <>
-                <p className="section-label">Предстоящие</p>
-                <ul className="task-list">
-                  {groups.active.map((t) => (
-                    <TaskRow
-                      key={t.id}
-                      task={t}
-                      overdue={false}
-                      onToggle={toggleTask}
-                      onDelete={deleteTask}
-                    />
-                  ))}
-                </ul>
-              </>
-            )}
-            {groups.done.length > 0 && (
-              <>
-                <p className="section-label">Выполнено</p>
-                <ul className="task-list">
-                  {groups.done.map((t) => (
-                    <TaskRow
-                      key={t.id}
-                      task={t}
-                      overdue={false}
-                      onToggle={toggleTask}
-                      onDelete={deleteTask}
-                    />
-                  ))}
-                </ul>
-              </>
-            )}
-          </>
+      <main className="app-main">
+        {tab === "calendar" && (
+          <Calendar
+            cursor={cursor}
+            onChangeCursor={setCursor}
+            tasks={tasks}
+            categories={categories}
+            dayMarks={dayMarks}
+            onSelectDay={setSelectedDay}
+          />
         )}
-      </section>
-    </>
+        {tab === "bulk" && <BulkForm onSubmit={handleBulk} />}
+        {tab === "settings" && (
+          <Settings
+            categories={categories}
+            telegram={telegram}
+            onCreateCategory={handleCreateCategory}
+            onUpdateCategory={handleUpdateCategory}
+            onDeleteCategory={handleDeleteCategory}
+            onLinkTelegram={handleLinkTelegram}
+            onUnlinkTelegram={handleUnlinkTelegram}
+          />
+        )}
+      </main>
+
+      <footer className="legend">
+        <span className="legend-title">Легенда:</span>
+        {categories.length === 0 && <span className="hint">нет категорий</span>}
+        {categories.map((c) => (
+          <span key={c.id} className="legend-item">
+            <span className="dot" style={{ background: c.color }} />
+            {c.name}
+          </span>
+        ))}
+      </footer>
+
+      {selectedDay && (
+        <DayModal
+          dateKey={selectedDay}
+          tasks={dayTasks}
+          categories={categories}
+          currentCategoryId={currentDayCategoryId}
+          onClose={() => setSelectedDay(null)}
+          onAddTask={handleAddTask}
+          onToggleTask={handleToggleTask}
+          onDeleteTask={handleDeleteTask}
+          onSetCategory={handleSetCategory}
+        />
+      )}
+    </div>
   );
 }
