@@ -1,0 +1,19 @@
+[Unit]
+Description=Task Manager (API + Telegram bot + reminders)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=taskmanager
+Group=taskmanager
+WorkingDirectory=/opt/task_manager/task-manager-for-lazy/backend
+ExecStart=/opt/task_manager/task-manager-for-lazy/backend/.venv/bin/python run.py
+Restart=on-failure
+RestartSec=5
+
+# Не храните секреты здесь — они в /opt/task_manager/task-manager-for-lazy/.env
+# (run.py загружает .env сам)
+
+[Install]
+WantedBy=multi-user.target

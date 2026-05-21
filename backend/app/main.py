@@ -8,7 +8,22 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+
+
+def resolve_frontend_dist() -> Path:
+    override = os.getenv("FRONTEND_DIST", "").strip()
+    if override:
+        return Path(override)
+    return PROJECT_ROOT / "frontend" / "dist"
+
+
+FRONTEND_DIST = resolve_frontend_dist()
+INDEX_HTML = FRONTEND_DIST / "index.html"
 
 from . import crud
 from .database import Base, engine, get_db
@@ -24,6 +39,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    if INDEX_HTML.is_file():
+        logger.info("Веб-интерфейс: %s", INDEX_HTML)
+    else:
+        logger.warning(
+            "index.html не найден (%s). Соберите: cd frontend && npm install && npm run build",
+            INDEX_HTML,
+        )
     start_scheduler()
     start_telegram_bot()
     yield
@@ -43,6 +65,21 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/debug/frontend")
+def debug_frontend():
+    files = []
+    if FRONTEND_DIST.is_dir():
+        files = [p.name for p in sorted(FRONTEND_DIST.iterdir())[:30]]
+    return {
+        "project_root": str(PROJECT_ROOT),
+        "frontend_dist": str(FRONTEND_DIST),
+        "index_html": str(INDEX_HTML),
+        "dist_exists": FRONTEND_DIST.is_dir(),
+        "index_exists": INDEX_HTML.is_file(),
+        "files_in_dist": files,
+    }
 
 
 @app.get("/api/tasks", response_model=list[TaskOut])
@@ -90,3 +127,24 @@ def telegram_link_code(db: Session = Depends(get_db)):
 def telegram_unlink(db: Session = Depends(get_db)):
     crud.set_setting(db, crud.CHAT_ID_KEY, None)
     return TelegramStatus(linked=False, link_code=None)
+
+
+@app.get("/", include_in_schema=False)
+def serve_frontend_root():
+    if INDEX_HTML.is_file():
+        return FileResponse(INDEX_HTML)
+    return {
+        "message": "API работает. index.html не найден.",
+        "health": "/api/health",
+        "debug": "/api/debug/frontend",
+        "build": "cd frontend && npm install && npm run build",
+    }
+
+
+_assets_dir = FRONTEND_DIST / "assets"
+if _assets_dir.is_dir():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=_assets_dir),
+        name="frontend-assets",
+    )
