@@ -1,6 +1,14 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
+
+
+def _serialize_utc(v: datetime | None) -> str | None:
+    if v is None:
+        return None
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=timezone.utc)
+    return v.isoformat()
 
 
 class TaskCreate(BaseModel):
@@ -26,6 +34,10 @@ class TaskOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+    @field_serializer("due_at", "created_at")
+    def _ser_dt(self, v: datetime) -> str:
+        return _serialize_utc(v) or ""
 
 
 class BulkTaskCreate(BaseModel):

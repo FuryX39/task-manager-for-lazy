@@ -29,3 +29,9 @@ export interface BulkResult {
   created: number;
   tasks: Task[];
 }
+
+export interface AppConfig {
+  timezone: string;
+  reminder_repeat_minutes: number;
+  snooze_minutes: number;
+}

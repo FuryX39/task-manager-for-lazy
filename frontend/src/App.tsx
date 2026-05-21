@@ -4,6 +4,7 @@ import BulkForm from "./components/BulkForm";
 import Calendar from "./components/Calendar";
 import DayModal from "./components/DayModal";
 import Settings from "./components/Settings";
+import { TzContext } from "./TzContext";
 import type { Category, DayMark, Task, TelegramStatus } from "./types";
 import { dueDateKey } from "./utils";
 
@@ -20,6 +21,7 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [dayMarks, setDayMarks] = useState<DayMark[]>([]);
   const [telegram, setTelegram] = useState<TelegramStatus>({ linked: false, link_code: null });
+  const [tz, setTz] = useState<string>("UTC");
   const [cursor, setCursor] = useState<Date>(() => {
     const d = new Date();
     d.setDate(1);
@@ -32,16 +34,18 @@ export default function App() {
   const reload = useCallback(async () => {
     try {
       setError(null);
-      const [t, c, m, tg] = await Promise.all([
+      const [t, c, m, tg, cfg] = await Promise.all([
         api.listTasks(),
         api.listCategories(),
         api.listDayMarks(),
         api.telegramStatus(),
+        api.getConfig(),
       ]);
       setTasks(t);
       setCategories(c);
       setDayMarks(m);
       setTelegram(tg);
+      setTz(cfg.timezone);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     }
@@ -64,8 +68,8 @@ export default function App() {
 
   const dayTasks = useMemo(() => {
     if (!selectedDay) return [];
-    return tasks.filter((t) => dueDateKey(t.due_at) === selectedDay);
-  }, [tasks, selectedDay]);
+    return tasks.filter((t) => dueDateKey(t.due_at, tz) === selectedDay);
+  }, [tasks, selectedDay, tz]);
 
   const currentDayCategoryId = useMemo(() => {
     if (!selectedDay) return undefined;
@@ -172,11 +176,18 @@ export default function App() {
         : paintCategory?.name ?? "Окраска";
 
   return (
+    <TzContext.Provider value={tz}>
     <div className="app">
       <header className="app-header">
         <div>
           <h1>Таск-менеджер</h1>
-          <p className="subtitle">Календарь, цветные метки дней и напоминания в Telegram</p>
+          <p className="subtitle">
+            Календарь, цветные метки дней и напоминания в Telegram
+            <span className="tz-badge" title="Часовой пояс приложения">
+              {" · "}
+              {tz}
+            </span>
+          </p>
         </div>
         <nav className="tabs">
           <button
@@ -304,5 +315,6 @@ export default function App() {
         />
       )}
     </div>
+    </TzContext.Provider>
   );
 }

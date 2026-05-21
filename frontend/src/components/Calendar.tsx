@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
+import { useTz } from "../TzContext";
 import type { Category, DayMark, Task } from "../types";
 import {
   WEEKDAY_LABELS,
@@ -31,18 +32,19 @@ export default function Calendar({
   onPaintDay,
   onPaintCommit,
 }: Props) {
+  const tz = useTz();
   const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
 
   const tasksByDay = useMemo(() => {
     const map = new Map<string, Task[]>();
     for (const t of tasks) {
-      const key = dueDateKey(t.due_at);
+      const key = dueDateKey(t.due_at, tz);
       const list = map.get(key) ?? [];
       list.push(t);
       map.set(key, list);
     }
     return map;
-  }, [tasks]);
+  }, [tasks, tz]);
 
   const markByDay = useMemo(() => {
     const map = new Map<string, number>();

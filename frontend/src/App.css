@@ -96,6 +96,11 @@ label {
   font-size: 0.9rem;
 }
 
+.tz-badge {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 .tabs {
   display: flex;
   gap: 0.35rem;

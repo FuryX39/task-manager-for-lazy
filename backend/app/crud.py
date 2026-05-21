@@ -1,8 +1,10 @@
 import secrets
 from datetime import date, datetime, timedelta, timezone
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from .config import APP_TZ
 from .models import Category, DayMark, Setting, Task
 
 LINK_CODE_KEY = "telegram_link_code"
@@ -17,6 +19,13 @@ DEFAULT_CATEGORIES = [
 ]
 
 
+def _to_utc_naive(dt: datetime) -> datetime:
+    """Принимает naive (как локальное в APP_TZ) или aware datetime и возвращает naive UTC."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def list_tasks(db: Session) -> list[Task]:
     return db.query(Task).order_by(Task.due_at.asc()).all()
 
@@ -26,9 +35,7 @@ def get_task(db: Session, task_id: int) -> Task | None:
 
 
 def create_task(db: Session, title: str, notes: str | None, due_at: datetime) -> Task:
-    if due_at.tzinfo is None:
-        due_at = due_at.replace(tzinfo=timezone.utc)
-    task = Task(title=title, notes=notes, due_at=due_at)
+    task = Task(title=title, notes=notes, due_at=_to_utc_naive(due_at))
     db.add(task)
     db.commit()
     db.refresh(task)
@@ -37,10 +44,12 @@ def create_task(db: Session, title: str, notes: str | None, due_at: datetime) ->
 
 def update_task(db: Session, task: Task, **fields) -> Task:
     for key, value in fields.items():
-        if value is None:
+        if value is None and key not in {"notes"}:
             continue
-        if key == "due_at" and value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+        if key == "due_at" and value is not None:
+            value = _to_utc_naive(value)
+            task.last_reminder_at = None
+            task.reminder_sent = False
         if key == "completed" and value is True:
             task.reminder_sent = True
         setattr(task, key, value)
@@ -102,21 +111,45 @@ def verify_and_link(db: Session, code: str, chat_id: str) -> bool:
     return True
 
 
-def tasks_due_for_reminder(db: Session, now: datetime) -> list[Task]:
+def tasks_due_for_reminder(
+    db: Session, now: datetime, repeat_threshold: datetime
+) -> list[Task]:
     return (
         db.query(Task)
         .filter(
             Task.completed.is_(False),
-            Task.reminder_sent.is_(False),
             Task.due_at <= now,
+            or_(
+                Task.last_reminder_at.is_(None),
+                Task.last_reminder_at <= repeat_threshold,
+            ),
         )
         .all()
     )
 
 
-def mark_reminder_sent(db: Session, task: Task) -> None:
+def mark_reminded(db: Session, task: Task, when: datetime) -> None:
+    task.last_reminder_at = when
     task.reminder_sent = True
     db.commit()
+
+
+def complete_task(db: Session, task: Task) -> Task:
+    task.completed = True
+    task.reminder_sent = True
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+def snooze_task(db: Session, task: Task, minutes: int) -> Task:
+    base = datetime.utcnow()
+    task.due_at = base + timedelta(minutes=minutes)
+    task.last_reminder_at = None
+    task.reminder_sent = False
+    db.commit()
+    db.refresh(task)
+    return task
 
 
 def bulk_create_tasks(
@@ -124,9 +157,7 @@ def bulk_create_tasks(
 ) -> list[Task]:
     created: list[Task] = []
     for due in due_ats:
-        if due.tzinfo is None:
-            due = due.replace(tzinfo=timezone.utc)
-        task = Task(title=title, notes=notes, due_at=due)
+        task = Task(title=title, notes=notes, due_at=_to_utc_naive(due))
         db.add(task)
         created.append(task)
     db.commit()

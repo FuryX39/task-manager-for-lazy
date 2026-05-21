@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
+import { useTz } from "../TzContext";
 import type { Category, Task } from "../types";
-import { formatTime, isoFromLocal } from "../utils";
+import { formatDateLong, formatTime, isoFromLocal } from "../utils";
 
 interface Props {
   dateKey: string;
@@ -25,6 +26,7 @@ export default function DayModal({
   onDeleteTask,
   onSetCategory,
 }: Props) {
+  const tz = useTz();
   const [time, setTime] = useState("09:00");
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
@@ -35,15 +37,7 @@ export default function DayModal({
     [tasks],
   );
 
-  const dateLabel = useMemo(() => {
-    const [y, m, d] = dateKey.split("-").map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString("ru-RU", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      weekday: "long",
-    });
-  }, [dateKey]);
+  const dateLabel = useMemo(() => formatDateLong(dateKey), [dateKey]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -116,7 +110,7 @@ export default function DayModal({
                   />
                   <div>
                     <p className="task-title">
-                      <span className="task-time">{formatTime(t.due_at)}</span>
+                      <span className="task-time">{formatTime(t.due_at, tz)}</span>
                       {t.title}
                     </p>
                     {t.notes && <p className="task-notes">{t.notes}</p>}

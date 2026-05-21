@@ -27,7 +27,9 @@ FRONTEND_DIST = resolve_frontend_dist()
 INDEX_HTML = FRONTEND_DIST / "index.html"
 
 from . import crud
+from .config import APP_TIMEZONE_NAME, REMINDER_REPEAT_MINUTES, SNOOZE_MINUTES
 from .database import Base, SessionLocal, engine, get_db
+from .migrations import ensure_schema
 from .schemas import (
     BulkTaskCreate,
     BulkTaskResult,
@@ -52,11 +54,17 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_schema()
     db = SessionLocal()
     try:
         crud.seed_default_categories(db)
     finally:
         db.close()
+    logger.info(
+        "Часовой пояс приложения: %s (повтор напоминаний каждые %s мин)",
+        APP_TIMEZONE_NAME,
+        REMINDER_REPEAT_MINUTES,
+    )
     if INDEX_HTML.is_file():
         logger.info("Веб-интерфейс: %s", INDEX_HTML)
     else:
@@ -84,6 +92,15 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/config")
+def get_config():
+    return {
+        "timezone": APP_TIMEZONE_NAME,
+        "reminder_repeat_minutes": REMINDER_REPEAT_MINUTES,
+        "snooze_minutes": SNOOZE_MINUTES,
+    }
 
 
 @app.get("/api/debug/telegram")
@@ -122,8 +139,6 @@ def patch_task(task_id: int, payload: TaskUpdate, db: Session = Depends(get_db))
     if not task:
         raise HTTPException(404, "Задача не найдена")
     data = payload.model_dump(exclude_unset=True)
-    if data.get("completed") is False and task.reminder_sent:
-        data["reminder_sent"] = False
     return crud.update_task(db, task, **data)
 
 

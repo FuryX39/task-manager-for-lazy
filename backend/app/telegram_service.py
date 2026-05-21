@@ -1,17 +1,52 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+)
 
-from .crud import get_chat_id, is_telegram_linked, verify_and_link
+from . import crud
+from .config import APP_TZ, SNOOZE_MINUTES
 from .database import SessionLocal
+from .models import Task
 
 logger = logging.getLogger(__name__)
 
 _application: Application | None = None
 _main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def _format_due(dt: datetime) -> str:
+    # В БД хранится naive UTC, добавим зону для корректной конвертации в APP_TZ.
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(APP_TZ).strftime("%d.%m.%Y %H:%M")
+
+
+def _reminder_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("✅ Выполнено", callback_data=f"done:{task_id}"),
+                InlineKeyboardButton(
+                    f"⏰ +{SNOOZE_MINUTES} мин", callback_data=f"snooze:{task_id}"
+                ),
+            ]
+        ]
+    )
+
+
+def _reminder_text(task: Task) -> str:
+    text = f"⏰ Напоминание: {task.title}\nСрок: {_format_due(task.due_at)}"
+    if task.notes:
+        text += f"\n\n{task.notes}"
+    return text
 
 
 async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -36,8 +71,8 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     db = SessionLocal()
     try:
-        linked = is_telegram_linked(db)
-        chat_id = get_chat_id(db)
+        linked = crud.is_telegram_linked(db)
+        chat_id = crud.get_chat_id(db)
     finally:
         db.close()
     if linked and update.effective_chat and str(update.effective_chat.id) == chat_id:
@@ -45,7 +80,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     elif linked:
         await update.message.reply_text("Привязка есть, но этот чат не совпадает с сохранённым.")
     else:
-        await update.message.reply_text("Telegram ещё не привязан. Используйте /link КОД из веб-интерфейса.")
+        await update.message.reply_text(
+            "Telegram ещё не привязан. Используйте /link КОД из веб-интерфейса."
+        )
 
 
 async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -56,16 +93,49 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     code = context.args[0].strip()
     chat_id = str(update.effective_chat.id)
-    logger.info("Запрос /link от chat_id=%s", chat_id)
     db = SessionLocal()
     try:
-        ok = verify_and_link(db, code, chat_id)
+        ok = crud.verify_and_link(db, code, chat_id)
     finally:
         db.close()
     if ok:
         await update.message.reply_text("Готово! Напоминания о задачах буду присылать сюда.")
     else:
         await update.message.reply_text("Код неверный или истёк. Сгенерируйте новый в веб-интерфейсе.")
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query or not query.data:
+        return
+    await query.answer()
+    data = query.data
+    try:
+        action, raw_id = data.split(":", 1)
+        task_id = int(raw_id)
+    except (ValueError, AttributeError):
+        return
+
+    db = SessionLocal()
+    try:
+        task = crud.get_task(db, task_id)
+        if not task:
+            await query.edit_message_text("Задача не найдена или удалена.")
+            return
+
+        if action == "done":
+            crud.complete_task(db, task)
+            await query.edit_message_text(
+                f"✅ Выполнено: {task.title}\nСрок был: {_format_due(task.due_at)}"
+            )
+        elif action == "snooze":
+            crud.snooze_task(db, task, SNOOZE_MINUTES)
+            await query.edit_message_text(
+                f"⏰ Отложено на {SNOOZE_MINUTES} мин: {task.title}\n"
+                f"Новый срок: {_format_due(task.due_at)}"
+            )
+    finally:
+        db.close()
 
 
 def _build_application() -> Application | None:
@@ -76,6 +146,7 @@ def _build_application() -> Application | None:
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("link", cmd_link))
+    app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(_on_error)
     return app
 
@@ -95,7 +166,6 @@ async def start_telegram_bot() -> None:
 
     try:
         await _application.initialize()
-        # Webhook блокирует polling (частая проблема на VPS)
         try:
             await _application.bot.delete_webhook(drop_pending_updates=True)
         except Exception:
@@ -138,23 +208,21 @@ def get_bot_debug_info() -> dict:
     }
 
 
-async def _send_message_async(chat_id: str, text: str) -> None:
-    if _application is None:
-        raise RuntimeError("Telegram-бот не запущен")
-    await _application.bot.send_message(chat_id=chat_id, text=text)
+async def _send_reminder_async(chat_id: str, text: str, keyboard: InlineKeyboardMarkup) -> None:
+    assert _application is not None
+    await _application.bot.send_message(
+        chat_id=chat_id, text=text, reply_markup=keyboard
+    )
 
 
-def send_reminder(chat_id: str, title: str, notes: str | None, due_at_iso: str) -> bool:
-    text = f"Напоминание: {title}\nСрок: {due_at_iso}"
-    if notes:
-        text += f"\n\n{notes}"
-
+def send_task_reminder(chat_id: str, task: Task) -> bool:
     if _application is None or _main_loop is None:
         logger.warning("Не удалось отправить напоминание: бот не запущен")
         return False
-
+    text = _reminder_text(task)
+    keyboard = _reminder_keyboard(task.id)
     future = asyncio.run_coroutine_threadsafe(
-        _send_message_async(chat_id, text),
+        _send_reminder_async(chat_id, text, keyboard),
         _main_loop,
     )
     future.result(timeout=30)

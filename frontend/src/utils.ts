@@ -6,29 +6,46 @@ export function toLocalDateKey(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+/** Возвращает naive ISO без TZ — сервер интерпретирует как локальное время в APP_TIMEZONE. */
 export function isoFromLocal(dateKey: string, time: string): string {
-  // dateKey: YYYY-MM-DD, time: HH:MM (локальное время) -> ISO в UTC
-  const [y, m, d] = dateKey.split("-").map(Number);
-  const [hh, mm] = time.split(":").map(Number);
-  const local = new Date(y, m - 1, d, hh, mm, 0, 0);
-  return local.toISOString();
+  const t = time.length === 5 ? `${time}:00` : time;
+  return `${dateKey}T${t}`;
 }
 
-export function formatTime(iso: string): string {
-  const d = new Date(iso);
-  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+/** YYYY-MM-DD дня, в который попадает iso по часовому поясу tz. */
+export function dueDateKey(iso: string, tz: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const y = parts.find((p) => p.type === "year")?.value ?? "";
+  const m = parts.find((p) => p.type === "month")?.value ?? "";
+  const d = parts.find((p) => p.type === "day")?.value ?? "";
+  return `${y}-${m}-${d}`;
 }
 
-export function formatDate(iso: string): string {
+export function formatTime(iso: string, tz: string): string {
+  return new Date(iso).toLocaleTimeString("ru-RU", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function formatDate(iso: string, tz: string): string {
   return new Date(iso).toLocaleDateString("ru-RU", {
+    timeZone: tz,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
 }
 
-export function formatDateLong(d: Date): string {
-  return d.toLocaleDateString("ru-RU", {
+export function formatDateLong(dateKey: string): string {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("ru-RU", {
     day: "numeric",
     month: "long",
     year: "numeric",
@@ -39,10 +56,6 @@ export function formatDateLong(d: Date): string {
 export function monthTitle(d: Date): string {
   const text = d.toLocaleDateString("ru-RU", { month: "long", year: "numeric" });
   return text.charAt(0).toUpperCase() + text.slice(1);
-}
-
-export function dueDateKey(iso: string): string {
-  return toLocalDateKey(new Date(iso));
 }
 
 export function eachDateInRange(fromKey: string, toKey: string): string[] {
@@ -60,7 +73,6 @@ export function eachDateInRange(fromKey: string, toKey: string): string[] {
   return out;
 }
 
-// Понедельник = 0, ..., Воскресенье = 6
 export function weekdayMonFirst(d: Date): number {
   return (d.getDay() + 6) % 7;
 }
