@@ -71,6 +71,11 @@ class DayMarkSet(BaseModel):
     category_id: int | None = None
 
 
+class DayMarksBulkSet(BaseModel):
+    days: list[date] = Field(min_length=1, max_length=1000)
+    category_id: int | None = None
+
+
 class TelegramStatus(BaseModel):
     linked: bool
     link_code: str | None = None

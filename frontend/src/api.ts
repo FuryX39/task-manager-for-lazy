@@ -43,6 +43,11 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ category_id }),
     }),
+  bulkSetDayMarks: (days: string[], category_id: number | null) =>
+    request<DayMark[]>("/day-marks/bulk", {
+      method: "POST",
+      body: JSON.stringify({ days, category_id }),
+    }),
 
   telegramStatus: () => request<TelegramStatus>("/telegram/status"),
   createLinkCode: () =>

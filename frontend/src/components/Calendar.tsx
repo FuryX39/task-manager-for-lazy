@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Category, DayMark, Task } from "../types";
 import {
   WEEKDAY_LABELS,
@@ -14,7 +14,10 @@ interface Props {
   tasks: Task[];
   categories: Category[];
   dayMarks: DayMark[];
+  paintActive: boolean;
   onSelectDay: (dateKey: string) => void;
+  onPaintDay: (dateKey: string) => void;
+  onPaintCommit: (dateKeys: string[]) => void;
 }
 
 export default function Calendar({
@@ -23,7 +26,10 @@ export default function Calendar({
   tasks,
   categories,
   dayMarks,
+  paintActive,
   onSelectDay,
+  onPaintDay,
+  onPaintCommit,
 }: Props) {
   const days = useMemo(() => buildMonthGrid(cursor), [cursor]);
 
@@ -53,6 +59,44 @@ export default function Calendar({
   const todayKey = toLocalDateKey(new Date());
   const currentMonth = cursor.getMonth();
 
+  const drag = useRef<{ active: boolean; painted: Set<string> }>({
+    active: false,
+    painted: new Set(),
+  });
+
+  useEffect(() => {
+    function endDrag() {
+      if (!drag.current.active) return;
+      const list = Array.from(drag.current.painted);
+      drag.current = { active: false, painted: new Set() };
+      if (list.length > 0) onPaintCommit(list);
+    }
+    window.addEventListener("pointerup", endDrag);
+    window.addEventListener("pointercancel", endDrag);
+    return () => {
+      window.removeEventListener("pointerup", endDrag);
+      window.removeEventListener("pointercancel", endDrag);
+    };
+  }, [onPaintCommit]);
+
+  useEffect(() => {
+    if (!paintActive && drag.current.active) {
+      drag.current = { active: false, painted: new Set() };
+    }
+  }, [paintActive]);
+
+  function startPaint(dateKey: string) {
+    drag.current = { active: true, painted: new Set([dateKey]) };
+    onPaintDay(dateKey);
+  }
+
+  function continuePaint(dateKey: string) {
+    if (!drag.current.active) return;
+    if (drag.current.painted.has(dateKey)) return;
+    drag.current.painted.add(dateKey);
+    onPaintDay(dateKey);
+  }
+
   function shift(delta: number) {
     const next = new Date(cursor);
     next.setDate(1);
@@ -61,7 +105,7 @@ export default function Calendar({
   }
 
   return (
-    <div className="calendar">
+    <div className={`calendar ${paintActive ? "paint-mode" : ""}`}>
       <header className="calendar-header">
         <button type="button" className="btn-ghost" onClick={() => shift(-1)} aria-label="Предыдущий месяц">
           ‹
@@ -102,7 +146,20 @@ export default function Calendar({
               key={key}
               className={`calendar-cell ${inMonth ? "" : "out"} ${isToday ? "today" : ""}`}
               style={style}
-              onClick={() => onSelectDay(key)}
+              onClick={(e) => {
+                if (paintActive) {
+                  e.preventDefault();
+                  return;
+                }
+                onSelectDay(key);
+              }}
+              onPointerDown={(e) => {
+                if (!paintActive) return;
+                if (e.button !== 0 && e.pointerType === "mouse") return;
+                e.preventDefault();
+                startPaint(key);
+              }}
+              onPointerEnter={() => continuePaint(key)}
               title={cat?.name}
             >
               <div className="cell-top">

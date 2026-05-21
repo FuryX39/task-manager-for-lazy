@@ -36,6 +36,7 @@ from .schemas import (
     CategoryUpdate,
     DayMarkOut,
     DayMarkSet,
+    DayMarksBulkSet,
     TaskCreate,
     TaskOut,
     TaskUpdate,
@@ -182,6 +183,13 @@ def put_day_mark(day: date, payload: DayMarkSet, db: Session = Depends(get_db)):
     if payload.category_id is not None and not crud.get_category(db, payload.category_id):
         raise HTTPException(404, "Категория не найдена")
     return crud.set_day_mark(db, day, payload.category_id)
+
+
+@app.post("/api/day-marks/bulk", response_model=list[DayMarkOut])
+def post_day_marks_bulk(payload: DayMarksBulkSet, db: Session = Depends(get_db)):
+    if payload.category_id is not None and not crud.get_category(db, payload.category_id):
+        raise HTTPException(404, "Категория не найдена")
+    return crud.bulk_set_day_marks(db, payload.days, payload.category_id)
 
 
 @app.get("/api/telegram/status", response_model=TelegramStatus)

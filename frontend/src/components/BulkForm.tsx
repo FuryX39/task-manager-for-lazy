@@ -1,17 +1,19 @@
 import { FormEvent, useMemo, useState } from "react";
+import type { Category } from "../types";
 import { WEEKDAY_LABELS, eachDateInRange, isoFromLocal, toLocalDateKey } from "../utils";
 
 interface Props {
-  onSubmit: (body: {
-    title: string;
-    notes: string | null;
-    due_ats: string[];
-  }) => Promise<number>;
+  categories: Category[];
+  onSubmit: (
+    body: { title: string; notes: string | null; due_ats: string[] },
+    dateKeys: string[],
+    paintCategoryId: number | null,
+  ) => Promise<number>;
 }
 
 const FULL_WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"];
 
-export default function BulkForm({ onSubmit }: Props) {
+export default function BulkForm({ categories, onSubmit }: Props) {
   const today = useMemo(() => toLocalDateKey(new Date()), []);
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
@@ -19,6 +21,7 @@ export default function BulkForm({ onSubmit }: Props) {
   const [title, setTitle] = useState("");
   const [notes, setNotes] = useState("");
   const [days, setDays] = useState<boolean[]>([false, false, false, false, false, false, false]);
+  const [paintCategoryId, setPaintCategoryId] = useState<number | "">("");
   const [submitting, setSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,12 +58,17 @@ export default function BulkForm({ onSubmit }: Props) {
     try {
       setSubmitting(true);
       const due_ats = preview.map((key) => isoFromLocal(key, time));
-      const created = await onSubmit({
-        title: title.trim(),
-        notes: notes.trim() || null,
-        due_ats,
-      });
-      setMessage(`Создано задач: ${created}`);
+      const catId = paintCategoryId === "" ? null : paintCategoryId;
+      const created = await onSubmit(
+        { title: title.trim(), notes: notes.trim() || null, due_ats },
+        preview,
+        catId,
+      );
+      const colorText =
+        catId === null
+          ? ""
+          : `, окрашено: ${preview.length}`;
+      setMessage(`Создано задач: ${created}${colorText}`);
       setTitle("");
       setNotes("");
     } catch (e) {
@@ -70,11 +78,13 @@ export default function BulkForm({ onSubmit }: Props) {
     }
   }
 
+  const selectedCategory = categories.find((c) => c.id === paintCategoryId);
+
   return (
     <div className="panel">
       <h2>Массовое добавление</h2>
       <p className="hint">
-        Создайте задачу сразу на выбранные дни недели в заданном диапазоне дат.
+        Создайте задачу сразу на выбранные дни недели в заданном диапазоне дат. Можно также окрасить эти дни.
       </p>
 
       {error && <p className="error">{error}</p>}
@@ -178,10 +188,45 @@ export default function BulkForm({ onSubmit }: Props) {
           />
         </label>
 
+        <div>
+          <p className="section-label">Окрасить эти дни</p>
+          <div className="category-pills">
+            <button
+              type="button"
+              className={`pill ${paintCategoryId === "" ? "active" : ""}`}
+              style={{ borderColor: "var(--border)" }}
+              onClick={() => setPaintCategoryId("")}
+            >
+              Не красить
+            </button>
+            {categories.map((c) => (
+              <button
+                type="button"
+                key={c.id}
+                className={`pill ${paintCategoryId === c.id ? "active" : ""}`}
+                style={{
+                  borderColor: c.color,
+                  background:
+                    paintCategoryId === c.id ? c.color : `${c.color}22`,
+                }}
+                onClick={() => setPaintCategoryId(c.id)}
+              >
+                <span className="dot" style={{ background: c.color }} />
+                {c.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <p className="hint">
           Будет создано задач: <b>{preview.length}</b>
           {preview.length > 0 &&
             `, первая ${preview[0]}, последняя ${preview[preview.length - 1]}`}
+          {selectedCategory && (
+            <>
+              {" "}и окрашено как <b style={{ color: selectedCategory.color }}>{selectedCategory.name}</b>
+            </>
+          )}
         </p>
 
         <button type="submit" className="btn-primary" disabled={submitting}>

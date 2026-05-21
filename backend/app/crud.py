@@ -203,3 +203,29 @@ def set_day_mark(db: Session, day: date, category_id: int | None) -> DayMark | N
     db.commit()
     db.refresh(existing)
     return existing
+
+
+def bulk_set_day_marks(
+    db: Session, days: list[date], category_id: int | None
+) -> list[DayMark]:
+    if not days:
+        return []
+    if category_id is None:
+        db.query(DayMark).filter(DayMark.day.in_(days)).delete(synchronize_session=False)
+        db.commit()
+        return []
+    existing = db.query(DayMark).filter(DayMark.day.in_(days)).all()
+    by_day = {dm.day: dm for dm in existing}
+    result: list[DayMark] = []
+    for day in days:
+        if day in by_day:
+            by_day[day].category_id = category_id
+            result.append(by_day[day])
+        else:
+            dm = DayMark(day=day, category_id=category_id)
+            db.add(dm)
+            result.append(dm)
+    db.commit()
+    for dm in result:
+        db.refresh(dm)
+    return result
