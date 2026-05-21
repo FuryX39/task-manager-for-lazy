@@ -84,6 +84,16 @@ sudo systemctl status task-manager
 journalctl -u task-manager -f
 ```
 
+### Telegram-бот не отвечает на /link
+
+1. Проверьте токен в `.env` и перезапуск: `sudo systemctl restart task-manager`
+2. Диагностика: `curl http://127.0.0.1:8000/api/debug/telegram`  
+   Должно быть `"token_configured": true`, `"polling_running": true`
+3. Логи: `journalctl -u task-manager -f` — строка `Telegram-бот запущен: @имя_бота`
+4. В Telegram пишите **тому боту**, чей токен в `.env` (проверьте у @BotFather)
+5. Команда: `/link КОД` (код из веба, действует 15 минут). Сначала `/start` — если отвечает, polling работает
+6. На сервере мог быть включён webhook — в новых версиях он сбрасывается при старте автоматически
+
 ### Ошибка `status=203/EXEC`
 
 Systemd не находит исполняемый файл в `ExecStart`. Проверьте:

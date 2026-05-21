@@ -30,7 +30,7 @@ from .database import Base, engine, get_db
 from .models import Task
 from .schemas import TaskCreate, TaskOut, TaskUpdate, TelegramStatus
 from .scheduler import start_scheduler
-from .telegram_service import start_telegram_bot
+from .telegram_service import get_bot_debug_info, start_telegram_bot, stop_telegram_bot
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -47,8 +47,9 @@ async def lifespan(_: FastAPI):
             INDEX_HTML,
         )
     start_scheduler()
-    start_telegram_bot()
+    await start_telegram_bot()
     yield
+    await stop_telegram_bot()
 
 
 app = FastAPI(title="Task Manager", lifespan=lifespan)
@@ -65,6 +66,11 @@ app.add_middleware(
 @app.get("/api/health")
 def health():
     return {"ok": True}
+
+
+@app.get("/api/debug/telegram")
+def debug_telegram():
+    return get_bot_debug_info()
 
 
 @app.get("/api/debug/frontend")

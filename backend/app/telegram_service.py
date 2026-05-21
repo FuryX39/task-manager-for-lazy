@@ -1,6 +1,6 @@
+import asyncio
 import logging
 import os
-import threading
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -10,7 +10,12 @@ from .database import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-_bot_thread: threading.Thread | None = None
+_application: Application | None = None
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def _on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    logger.exception("Ошибка Telegram-бота: %s", context.error)
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -51,6 +56,7 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     code = context.args[0].strip()
     chat_id = str(update.effective_chat.id)
+    logger.info("Запрос /link от chat_id=%s", chat_id)
     db = SessionLocal()
     try:
         ok = verify_and_link(db, code, chat_id)
@@ -62,40 +68,85 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Код неверный или истёк. Сгенерируйте новый в веб-интерфейсе.")
 
 
-def _run_polling(token: str) -> None:
-    application = Application.builder().token(token).build()
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CommandHandler("status", cmd_status))
-    application.add_handler(CommandHandler("link", cmd_link))
-    application.run_polling(drop_pending_updates=True)
-
-
-def start_telegram_bot() -> None:
-    global _bot_thread
+def _build_application() -> Application | None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
+        return None
+    app = Application.builder().token(token).build()
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("link", cmd_link))
+    app.add_error_handler(_on_error)
+    return app
+
+
+async def start_telegram_bot() -> None:
+    global _application, _main_loop
+
+    if _application is not None:
+        return
+
+    _application = _build_application()
+    if _application is None:
         logger.warning("TELEGRAM_BOT_TOKEN не задан — бот не запущен")
         return
-    if _bot_thread and _bot_thread.is_alive():
+
+    _main_loop = asyncio.get_running_loop()
+
+    # Webhook блокирует polling (частая проблема на VPS)
+    await _application.bot.delete_webhook(drop_pending_updates=True)
+
+    await _application.initialize()
+    await _application.start()
+    await _application.updater.start_polling(drop_pending_updates=True)
+
+    me = await _application.bot.get_me()
+    logger.info("Telegram-бот запущен: @%s (polling)", me.username)
+
+
+async def stop_telegram_bot() -> None:
+    global _application, _main_loop
+
+    if _application is None:
         return
-    _bot_thread = threading.Thread(
-        target=_run_polling,
-        args=(token,),
-        daemon=True,
-        name="telegram-bot",
-    )
-    _bot_thread.start()
-    logger.info("Telegram-бот запущен")
+
+    if _application.updater.running:
+        await _application.updater.stop()
+    await _application.stop()
+    await _application.shutdown()
+    _application = None
+    _main_loop = None
+    logger.info("Telegram-бот остановлен")
 
 
-async def send_reminder(chat_id: str, title: str, notes: str | None, due_at_iso: str) -> bool:
+def get_bot_debug_info() -> dict:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
-        return False
-    app = Application.builder().token(token).build()
+    polling = bool(_application and _application.updater.running)
+    return {
+        "token_configured": bool(token),
+        "token_prefix": token[:8] + "..." if len(token) > 8 else None,
+        "polling_running": polling,
+    }
+
+
+async def _send_message_async(chat_id: str, text: str) -> None:
+    if _application is None:
+        raise RuntimeError("Telegram-бот не запущен")
+    await _application.bot.send_message(chat_id=chat_id, text=text)
+
+
+def send_reminder(chat_id: str, title: str, notes: str | None, due_at_iso: str) -> bool:
     text = f"Напоминание: {title}\nСрок: {due_at_iso}"
     if notes:
         text += f"\n\n{notes}"
-    async with app:
-        await app.bot.send_message(chat_id=chat_id, text=text)
+
+    if _application is None or _main_loop is None:
+        logger.warning("Не удалось отправить напоминание: бот не запущен")
+        return False
+
+    future = asyncio.run_coroutine_threadsafe(
+        _send_message_async(chat_id, text),
+        _main_loop,
+    )
+    future.result(timeout=30)
     return True
