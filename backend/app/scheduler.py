@@ -16,21 +16,29 @@ _scheduler: BackgroundScheduler | None = None
 def check_reminders() -> None:
     db = SessionLocal()
     try:
-        chat_id = crud.get_chat_id(db)
-        if not chat_id:
-            return
         # БД хранит naive UTC, сравниваем тоже naive UTC
         now = datetime.utcnow()
         threshold = now - timedelta(minutes=REMINDER_REPEAT_MINUTES)
-        due_tasks = crud.tasks_due_for_reminder(db, now, threshold)
-        for task in due_tasks:
-            try:
-                ok = send_task_reminder(chat_id, task)
-                if ok:
-                    crud.mark_reminded(db, task, now)
-                    logger.info("Напоминание отправлено: %s (id=%s)", task.title, task.id)
-            except Exception:
-                logger.exception("Не удалось отправить напоминание для задачи %s", task.id)
+        for user in crud.list_users_with_chat(db):
+            chat_id = user.telegram_chat_id
+            if not chat_id:
+                continue
+            due_tasks = crud.tasks_due_for_reminder(db, user.id, now, threshold)
+            for task in due_tasks:
+                try:
+                    ok = send_task_reminder(chat_id, task)
+                    if ok:
+                        crud.mark_reminded(db, task, now)
+                        logger.info(
+                            "Напоминание отправлено: %s (task_id=%s user_id=%s)",
+                            task.title,
+                            task.id,
+                            user.id,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Не удалось отправить напоминание для задачи %s", task.id
+                    )
     finally:
         db.close()
 

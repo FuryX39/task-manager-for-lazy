@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "./api";
+import AuthScreen from "./components/AuthScreen";
+import AdminPanel from "./components/AdminPanel";
 import BulkForm from "./components/BulkForm";
 import Calendar from "./components/Calendar";
 import DayModal from "./components/DayModal";
+import Profile from "./components/Profile";
 import Settings from "./components/Settings";
 import { TzContext } from "./TzContext";
-import type { Category, DayMark, Task, TelegramStatus } from "./types";
+import type { AdminUser, Category, DayMark, Task, TelegramStatus, User } from "./types";
 import { dueDateKey } from "./utils";
 
-type Tab = "calendar" | "bulk" | "settings";
+type Tab = "calendar" | "bulk" | "profile" | "settings" | "admin";
 
 // undefined — режим окраски выключен (клик по дню открывает модалку)
 // null — ластик (клик по дню снимает метку)
@@ -17,9 +20,12 @@ type PaintMode = number | null | undefined;
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("calendar");
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [dayMarks, setDayMarks] = useState<DayMark[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [telegram, setTelegram] = useState<TelegramStatus>({ linked: false, link_code: null });
   const [tz, setTz] = useState<string>("UTC");
   const [cursor, setCursor] = useState<Date>(() => {
@@ -31,7 +37,26 @@ export default function App() {
   const [paintMode, setPaintMode] = useState<PaintMode>(undefined);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .me()
+      .then((u) => {
+        if (!cancelled) setUser(u);
+      })
+      .catch(() => {
+        if (!cancelled) setUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const reload = useCallback(async () => {
+    if (!user) return;
     try {
       setError(null);
       const [t, c, m, tg, cfg] = await Promise.all([
@@ -46,16 +71,22 @@ export default function App() {
       setDayMarks(m);
       setTelegram(tg);
       setTz(cfg.timezone);
+      if (user.is_admin) {
+        setAdminUsers(await api.adminUsers());
+      } else {
+        setAdminUsers([]);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     }
-  }, []);
+  }, [user]);
 
   useEffect(() => {
+    if (!user) return;
     reload();
     const id = setInterval(reload, 60_000);
     return () => clearInterval(id);
-  }, [reload]);
+  }, [reload, user]);
 
   useEffect(() => {
     if (paintMode === undefined) return;
@@ -168,12 +199,51 @@ export default function App() {
     setTelegram(status);
   }
 
+  async function handleLogout() {
+    await api.logout();
+    setUser(null);
+    setTasks([]);
+    setCategories([]);
+    setDayMarks([]);
+    setAdminUsers([]);
+    setSelectedDay(null);
+  }
+
+  async function handleDeleteAccount() {
+    if (!user) return;
+    await api.deleteAccount(user.email);
+    setUser(null);
+    setTasks([]);
+    setCategories([]);
+    setDayMarks([]);
+    setAdminUsers([]);
+    setSelectedDay(null);
+  }
+
+  async function handleSaveProfile(payload: {
+    display_name?: string;
+    email?: string;
+    current_password?: string;
+    new_password?: string;
+  }) {
+    const updated = await api.updateProfile(payload);
+    setUser(updated);
+  }
+
   const paintLabel =
     paintMode === undefined
       ? null
       : paintMode === null
         ? "Снятие метки"
         : paintCategory?.name ?? "Окраска";
+
+  if (!authReady) {
+    return <div className="app"><p className="hint">Загрузка…</p></div>;
+  }
+
+  if (!user) {
+    return <AuthScreen onAuth={(u) => setUser(u)} />;
+  }
 
   return (
     <TzContext.Provider value={tz}>
@@ -187,6 +257,7 @@ export default function App() {
               {" · "}
               {tz}
             </span>
+            <span className="tz-badge">{` · ${user.display_name}`}</span>
           </p>
         </div>
         <nav className="tabs">
@@ -211,6 +282,22 @@ export default function App() {
           >
             Настройки
           </button>
+          <button
+            type="button"
+            className={`tab ${tab === "profile" ? "active" : ""}`}
+            onClick={() => setTab("profile")}
+          >
+            Профиль
+          </button>
+          {user.is_admin && (
+            <button
+              type="button"
+              className={`tab ${tab === "admin" ? "active" : ""}`}
+              onClick={() => setTab("admin")}
+            >
+              Админ
+            </button>
+          )}
         </nav>
       </header>
 
@@ -263,6 +350,15 @@ export default function App() {
             onUnlinkTelegram={handleUnlinkTelegram}
           />
         )}
+        {tab === "profile" && (
+          <Profile
+            user={user}
+            onSave={handleSaveProfile}
+            onLogout={handleLogout}
+            onDeleteAccount={handleDeleteAccount}
+          />
+        )}
+        {tab === "admin" && user.is_admin && <AdminPanel users={adminUsers} />}
       </main>
 
       <footer className="legend">

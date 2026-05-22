@@ -35,6 +35,10 @@ TELEGRAM_BOT_TOKEN=...
 HOST=127.0.0.1
 PORT=8000
 CORS_ORIGINS=https://ваш-домен.ru
+APP_TIMEZONE=Europe/Moscow
+SESSION_SECRET=change-me-very-long-random
+COOKIE_SECURE=1
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
 ```
 
 `HOST=127.0.0.1`, если снаружи стоит nginx; `0.0.0.0` — если API доступен напрямую.
@@ -60,6 +64,8 @@ sudo -u taskmanager .venv/bin/python run.py
 ```bash
 cd /opt/task_manager/task-manager-for-lazy/frontend
 sudo -u taskmanager npm install
+# если используете Google login на фронте:
+sudo -u taskmanager sh -c 'echo "VITE_GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com" > .env'
 sudo -u taskmanager npm run build
 ```
 

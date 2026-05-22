@@ -91,3 +91,61 @@ class DayMarksBulkSet(BaseModel):
 class TelegramStatus(BaseModel):
     linked: bool
     link_code: str | None = None
+
+
+class UserOut(BaseModel):
+    id: int
+    email: str
+    display_name: str
+    has_password: bool
+    has_google: bool
+    telegram_linked: bool
+    is_admin: bool
+    created_at: datetime
+    last_login_at: datetime | None
+
+    @field_serializer("created_at", "last_login_at")
+    def _ser_user_dt(self, v: datetime | None) -> str | None:
+        return _serialize_utc(v)
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    display_name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=200)
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=1, max_length=200)
+
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str = Field(min_length=10)
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm_email: str
+
+
+class UpdateProfileRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=120)
+    email: str | None = None
+    current_password: str | None = Field(default=None, min_length=1, max_length=200)
+    new_password: str | None = Field(default=None, min_length=8, max_length=200)
+
+
+class AdminUserOut(BaseModel):
+    id: int
+    email: str
+    display_name: str
+    is_admin: bool
+    has_password: bool
+    has_google: bool
+    telegram_linked: bool
+    created_at: datetime
+    last_login_at: datetime | None
+
+    @field_serializer("created_at", "last_login_at")
+    def _ser_admin_dt(self, v: datetime | None) -> str | None:
+        return _serialize_utc(v)

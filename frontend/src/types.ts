@@ -35,3 +35,27 @@ export interface AppConfig {
   reminder_repeat_minutes: number;
   snooze_minutes: number;
 }
+
+export interface User {
+  id: number;
+  email: string;
+  display_name: string;
+  has_password: boolean;
+  has_google: boolean;
+  telegram_linked: boolean;
+  is_admin: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  display_name: string;
+  is_admin: boolean;
+  has_password: boolean;
+  has_google: boolean;
+  telegram_linked: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}

@@ -71,14 +71,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     db = SessionLocal()
     try:
-        linked = crud.is_telegram_linked(db)
-        chat_id = crud.get_chat_id(db)
+        chat_id = str(update.effective_chat.id) if update.effective_chat else None
+        user = crud.get_user_by_chat_id(db, chat_id) if chat_id else None
     finally:
         db.close()
-    if linked and update.effective_chat and str(update.effective_chat.id) == chat_id:
-        await update.message.reply_text("Telegram привязан. Напоминания будут приходить сюда.")
-    elif linked:
-        await update.message.reply_text("Привязка есть, но этот чат не совпадает с сохранённым.")
+    if user:
+        await update.message.reply_text(
+            f"Telegram привязан к пользователю {user.display_name} ({user.email})."
+        )
     else:
         await update.message.reply_text(
             "Telegram ещё не привязан. Используйте /link КОД из веб-интерфейса."
@@ -91,17 +91,21 @@ async def cmd_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
         await update.message.reply_text("Укажите код: /link AB12CD")
         return
-    code = context.args[0].strip()
+    code = context.args[0].strip().upper()
     chat_id = str(update.effective_chat.id)
     db = SessionLocal()
     try:
-        ok = crud.verify_and_link(db, code, chat_id)
+        linked_user = crud.verify_and_link_by_code(db, code, chat_id)
     finally:
         db.close()
-    if ok:
-        await update.message.reply_text("Готово! Напоминания о задачах буду присылать сюда.")
+    if linked_user:
+        await update.message.reply_text(
+            f"Готово! Чат привязан к аккаунту {linked_user.display_name}."
+        )
     else:
-        await update.message.reply_text("Код неверный или истёк. Сгенерируйте новый в веб-интерфейсе.")
+        await update.message.reply_text(
+            "Код неверный/истёк или этот чат уже привязан к другому аккаунту."
+        )
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -116,11 +120,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     except (ValueError, AttributeError):
         return
 
+    if not update.effective_chat:
+        return
+    chat_id = str(update.effective_chat.id)
+
     db = SessionLocal()
     try:
-        task = crud.get_task(db, task_id)
+        user = crud.get_user_by_chat_id(db, chat_id)
+        if not user:
+            await query.edit_message_text("Этот чат не привязан к аккаунту.")
+            return
+        task = crud.get_task(db, user.id, task_id)
         if not task:
-            await query.edit_message_text("Задача не найдена или удалена.")
+            await query.edit_message_text("Задача не найдена или не принадлежит вашему аккаунту.")
             return
 
         if action == "done":
